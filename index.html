@@ -142,6 +142,18 @@ canvas#cv{position:absolute;inset:0;width:100%;height:100%;display:block;image-r
 .heroSkill small{color:var(--sub)}
 .heroSkill:disabled{opacity:.55;cursor:default}
 #heroGrowthClose{width:100%;min-height:38px;border:0;border-radius:8px;background:var(--gold);color:var(--ln);font-weight:900}
+#bReview{border:2px solid #7f66a6;border-radius:12px;background:var(--pn2);padding:10px 20px;font-weight:900}
+#review{width:min(560px,calc(100% - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:2px solid #7f66a6;border-radius:14px;padding:clamp(12px,4vw,22px);background:var(--pn);color:var(--tx)}
+#review::backdrop{background:rgba(13,8,20,.8)}
+#reviewTitle{margin:0;font-size:22px}
+#reviewProgress,#reviewPrevious{color:var(--sub);font-size:13px}
+#reviewQuestion{font-size:clamp(16px,4.6vw,20px);font-weight:900;line-height:1.45;white-space:pre-line;word-break:keep-all}
+#reviewOptions{display:grid;gap:6px}
+#reviewOptions .opt{min-height:42px;text-align:left;padding:6px 10px}
+#reviewFeedback{white-space:pre-line;line-height:1.55;word-break:keep-all}
+.reviewActions{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-top:10px}
+.reviewActions button{min-height:42px;border:1px solid #7f66a6;border-radius:8px;padding:6px 12px;background:var(--pn2);font-weight:900}
+#reviewNext{background:var(--gold);color:var(--ln)}
 </style>
 </head>
 <body>
@@ -209,7 +221,22 @@ canvas#cv{position:absolute;inset:0;width:100%;height:100%;display:block;image-r
   <h1>게임 끝!</h1>
   <p id="overTxt"></p>
   <button class="big" id="bRestart">다시 도전</button>
+  <button type="button" id="bReview" class="hidden">오답 복습</button>
 </div>
+<dialog id="review" aria-labelledby="reviewTitle">
+  <h2 id="reviewTitle" tabindex="-1">오답 복습</h2>
+  <p id="reviewProgress"></p>
+  <div id="reviewItem">
+    <p id="reviewQuestion"></p>
+    <p id="reviewPrevious"></p>
+    <div id="reviewOptions"></div>
+  </div>
+  <p id="reviewFeedback" role="status"></p>
+  <div class="reviewActions">
+    <button type="button" id="reviewClose">결과로 돌아가기</button>
+    <button type="button" id="reviewNext" class="hidden">다음 문제</button>
+  </div>
+</dialog>
 <script id="autumn-atlas-data" type="text/plain">
 UklGRiTiAQBXRUJQVlA4WAoAAAAQAAAAfwEArwIAQUxQSElxAAAB8If9n2o77f89XzOzz0lCEiKE4O7u7laKFmiR4l4cKrRAcWhpcShWKBCgUNy9uFux4oQg
 SQhxz9l75vV6/rH3XnuttXcO7+/3J42ICcD/z1IHzP+LG0dSqfrhTghB2k2AUBeArqt12ryQ9hIvLaw7+t1uYNNb3tXZ6/nQxPU74urFgdArE4f1b/+GjSNH
@@ -2026,7 +2053,7 @@ function newGame(def){
   SLOTS.forEach(s=>s.t=null);sel=null;const DF=DIFF[diffKey];
   const p=HERO_HOME();
   HE={def,x:p.x,y:p.y,tx:p.x,ty:p.y,hp:def.hp,max:def.hp,dead:false,resp:0,cd:0,face:1,hit:0,order:false,bob:0,lv:1,mult:1,points:0,skills:{power:0,health:0,speed:0}};
-  G={df:DF,lives:DF.lives,gold:DF.gold,qRight:0,qTotal:0,kills:0,bestCombo:0,leaked:0,tint:[0,0,0,0],stage:1,score:0,mons:[],projs:[],parts:[],texts:[],rings:[],bolts:[],queue:[],spawnT:0,phase:'wait',phaseT:16,paused:false,speed:1,shake:0,flash:0,clock:0,banner:0,spellMode:null,combo:0,eng:0};
+  G={df:DF,lives:DF.lives,gold:DF.gold,qRight:0,qTotal:0,missed:new Map(),kills:0,bestCombo:0,leaked:0,tint:[0,0,0,0],stage:1,score:0,mons:[],projs:[],parts:[],texts:[],rings:[],bolts:[],queue:[],spawnT:0,phase:'wait',phaseT:16,paused:false,speed:1,shake:0,flash:0,clock:0,banner:0,spellMode:null,combo:0,eng:0};
   SP.thunder.cd=8;SP.ice.cd=12;
   paintHeroPortrait($('hMini'),def.id);pend=null;
   $('over').classList.add('hidden');$('menu').classList.add('hidden');
@@ -2146,6 +2173,10 @@ function nextQ(){
 }
 function updStat(){$('qstat').textContent=G&&G.qTotal?'정답 '+G.qRight+'/'+G.qTotal+' ('+Math.round(G.qRight/G.qTotal*100)+'%) · 최고 연속 '+G.bestCombo:''}
 function updCombo(){$('combo').textContent=G&&G.combo>=2?'🔥 '+G.combo+'연속 (+'+Math.min(50,G.combo*10)+'%)':''}
+function scheduleNextQuestion(delay){
+  const run=G;
+  setTimeout(()=>{if(G===run&&run.phase!=='over')nextQ()},delay);
+}
 function answer(i){
   if(!G||Q.locked||G.paused||heroGrowth.open||G.phase==='over')return;
   const bs=$('opts').children,b=bs[i],e=Q.e;
@@ -2157,16 +2188,17 @@ function answer(i){
     const gold=Math.round(((Q.tries?12:20)+(Q.tries?0:30*bonus))*mult);
     G.gold+=gold;hud();sfx.ok();ftext(70,40,'+'+gold+' 💰');
     const cut=HE.def.id==='sage'?3.5:2.5;SP.thunder.cd=Math.max(0,SP.thunder.cd-cut);SP.ice.cd=Math.max(0,SP.ice.cd-cut);
-    $('qmsg').innerHTML='🎉 정답! <b style="color:#ffd45a">+'+gold+' 💰</b> · 스킬 충전!<br>'+e.exp;setTimeout(()=>{if(G)nextQ()},1500);
+    $('qmsg').innerHTML='🎉 정답! <b style="color:#ffd45a">+'+gold+' 💰</b> · 스킬 충전!<br>'+e.exp;scheduleNextQuestion(1500);
   }else{
+    if(!G.missed.has(e))G.missed.set(e,{e,options:Q.opts.slice(),picked:Q.opts[i]});
     b.classList.add('no');b.disabled=true;sfx.no();
     if(Q.tries===0){Q.tries=1;G.combo=0;updCombo();$('qmsg').textContent='앗! 한 번 더 도전해 보세요.'}
     else{Q.locked=true;G.gold+=5;G.qTotal++;updStat();hud();[...bs].forEach((x,k)=>{x.disabled=true;if(Q.opts[k]===e.ans)x.classList.add('ok')});
-      $('qmsg').innerHTML='정답은 <b style="color:#ffd45a">'+e.ans+'</b> (+5 💰)<br>'+e.exp;setTimeout(()=>{if(G)nextQ()},2600)}
+      $('qmsg').innerHTML='정답은 <b style="color:#ffd45a">'+e.ans+'</b> (+5 💰)<br>'+e.exp;scheduleNextQuestion(2600)}
   }
 }
 addEventListener('keydown',e=>{
-  if(heroGrowth.open)return;
+  if(heroGrowth.open||reviewDialog.open)return;
   if(e.code==='Space'&&(e.target===$('heroGrowthButton')||document.activeElement===$('heroGrowthButton')))return;
   if(e.key==='Enter'&&document.activeElement===$('heroGrowthButton'))return;
   if(e.key>='1'&&e.key<='4')answer(+e.key-1);
@@ -2181,6 +2213,57 @@ $('bPause').onclick=togglePause;
 $('bSpeed').onclick=()=>{if(!G)return;G.speed=G.speed===1?2:G.speed===2?3:1;$('bSpeed').textContent='×'+G.speed};
 $('bSnd').onclick=()=>{SND=!SND;$('bSnd').textContent=SND?'🔊':'🔇'};
 $('bRestart').onclick=()=>{$('over').classList.add('hidden');$('menu').classList.remove('hidden')};
+
+const reviewDialog=$('review');
+let reviewItems=[],reviewIndex=0,reviewRight=0;
+function showReviewQuestion(){
+  const {e,options,picked}=reviewItems[reviewIndex];
+  $('reviewProgress').textContent=e.kind+' · '+(reviewIndex+1)+' / '+reviewItems.length;
+  $('reviewQuestion').textContent=e.q;
+  $('reviewPrevious').textContent='게임에서 처음 고른 답 · '+picked;
+  $('reviewFeedback').textContent='';
+  const next=$('reviewNext'),box=$('reviewOptions');
+  next.classList.add('hidden');
+  next.textContent=reviewIndex+1===reviewItems.length?'복습 결과 보기':'다음 문제';
+  box.replaceChildren();
+  for(const option of shuffle(options)){
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='opt';
+    button.textContent=option;
+    button.onclick=()=>{
+      const correct=option===e.ans;
+      if(correct)reviewRight++;
+      for(const choice of box.children){
+        choice.disabled=true;
+        if(choice.textContent===e.ans)choice.classList.add('ok');
+      }
+      if(!correct)button.classList.add('no');
+      $('reviewFeedback').textContent=(correct?'정답이에요!':'정답 · '+e.ans)+'\n'+e.exp;
+      next.classList.remove('hidden');
+      next.focus();
+    };
+    box.appendChild(button);
+  }
+  $('reviewTitle').focus();
+}
+$('bReview').onclick=()=>{
+  if(G?.phase!=='over'||!G.missed.size||reviewDialog.open)return;
+  reviewItems=[...G.missed.values()];
+  reviewIndex=reviewRight=0;
+  $('reviewItem').classList.remove('hidden');
+  reviewDialog.showModal();
+  showReviewQuestion();
+};
+$('reviewNext').onclick=()=>{
+  if(++reviewIndex<reviewItems.length){showReviewQuestion();return}
+  $('reviewItem').classList.add('hidden');
+  $('reviewProgress').textContent='복습 완료';
+  $('reviewFeedback').textContent=reviewItems.length+'문제 중 '+reviewRight+'문제를 맞혔어요.';
+  $('reviewNext').classList.add('hidden');
+  $('reviewClose').focus();
+};
+$('reviewClose').onclick=()=>reviewDialog.close();
 let pickHero=null;
 HEROES.forEach(h=>{
   const d=document.createElement('button');d.className='hero';
@@ -2313,6 +2396,10 @@ function gameOver(){
   try{const key='quizDefenseBest_'+diffKey;best=+localStorage.getItem(key)||0;if(G.stage>best){best=G.stage;localStorage.setItem(key,best)}}catch(e){best=Math.max(best,G.stage)}
   const pct=G.qTotal?Math.round(G.qRight/G.qTotal*100):0;
   $('overTxt').innerHTML='<span class="ovstage">스테이지 <b>'+G.stage+'</b></span><div class="ovgrid"><div>⭐ 점수<b>'+G.score+'</b></div><div>📝 정답<b>'+G.qRight+'/'+G.qTotal+'</b><small>'+pct+'%</small></div><div>🔥 최고 연속<b>'+G.bestCombo+'</b></div><div>⚔ 처치<b>'+G.kills+'</b></div></div><p>난이도 '+G.df.name+' · 이 기기 최고 기록 스테이지 '+best+'</p>';
+  const reviewButton=$('bReview');
+  const missed=G.missed.size;
+  reviewButton.textContent='오답 복습 ('+missed+'문제)';
+  reviewButton.classList.toggle('hidden',!missed);
   $('over').classList.remove('hidden');
 }
 
